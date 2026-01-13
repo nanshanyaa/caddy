@@ -1,0 +1,41 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: caddy-hub-backend
+    restart: unless-stopped
+    volumes:
+      - ./data_db:/data
+    ports:
+      - "18000:8000"
+    environment:
+      - CF_API_TOKEN=${CF_API_TOKEN}
+      - CF_ZONE_NAME=${CF_ZONE_NAME:-tqss.de}
+      - CF_ZONE_ID=${CF_ZONE_ID}
+      - CF_RECORD_TYPE=${CF_RECORD_TYPE:-A}
+      - CF_DNS_PROXY=${CF_DNS_PROXY:-false}
+      - CF_RECORD_TTL=${CF_RECORD_TTL:-1}
+      - CF_DNS_DELETE=${CF_DNS_DELETE:-true}
+      - CF_CNAME_TARGET=${CF_CNAME_TARGET}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/state', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: caddy-hub-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "13000:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -77,7 +77,7 @@ const dragActive = ref(false);
 const showUrlInput = ref(false);
 const urlValue = ref('');
 
-const helperText = computed(() => uploadStore.isTelegramAvailable ? '单文件最大 100MB' : '当前上传不可用，请先检查状态页');
+const helperText = computed(() => uploadStore.isUploadAvailable ? '单文件最大 100MB' : '当前上传不可用，请先检查状态页');
 const statusText = computed(() => {
   if (uploadStore.currentState === 'uploading') return '上传中';
   if (uploadStore.currentState === 'success') return '链接已就绪';

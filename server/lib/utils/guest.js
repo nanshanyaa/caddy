@@ -1,11 +1,25 @@
 ﻿const { run, get } = require('../../db');
 
-function getClientIp(request) {
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (forwarded) {
-    return forwarded.split(',')[0].trim();
+function normalizeHeaderIp(value) {
+  const text = String(value || '').trim();
+  return text || '';
+}
+
+function getClientIp(request, trustProxyIpHeaders = true) {
+  if (!trustProxyIpHeaders) {
+    return '0.0.0.0';
   }
-  return request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || '0.0.0.0';
+
+  const realIp = normalizeHeaderIp(request.headers.get('x-real-ip'));
+  if (realIp) return realIp;
+
+  const forwarded = normalizeHeaderIp(request.headers.get('x-forwarded-for'));
+  if (forwarded) {
+    const hops = forwarded.split(',').map((hop) => normalizeHeaderIp(hop)).filter(Boolean);
+    if (hops.length) return hops[hops.length - 1];
+  }
+
+  return normalizeHeaderIp(request.headers.get('cf-connecting-ip')) || '0.0.0.0';
 }
 
 function todayKey() {
@@ -46,7 +60,7 @@ class GuestService {
       };
     }
 
-    const ip = getClientIp(request);
+    const ip = getClientIp(request, this.config.trustProxyIpHeaders);
     const day = todayKey();
     const row = get(this.db, 'SELECT count FROM guest_upload_counters WHERE id = ?', [`${ip}:${day}`]);
     const current = row ? Number(row.count) : 0;
@@ -69,7 +83,7 @@ class GuestService {
   incrementUsage(request) {
     if (!this.config.guestUploadEnabled) return;
 
-    const ip = getClientIp(request);
+    const ip = getClientIp(request, this.config.trustProxyIpHeaders);
     const day = todayKey();
     const id = `${ip}:${day}`;
     const now = Date.now();

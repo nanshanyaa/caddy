@@ -3,6 +3,11 @@ const path = require('node:path');
 const { run, get, all } = require('../../db');
 const { normalizeFolderPath } = require('../repos/file-repo');
 
+function toPositiveInteger(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 class ChunkUploadService {
   constructor({ db, config, uploadService }) {
     this.db = db;
@@ -21,6 +26,17 @@ class ChunkUploadService {
   }
 
   initTask({ fileName, fileSize, fileType, totalChunks, storageMode, storageId, folderPath }) {
+    const normalizedFileSize = toPositiveInteger(fileSize);
+    if (!normalizedFileSize) {
+      throw new Error('Invalid file size.');
+    }
+    if (normalizedFileSize > this.config.uploadMaxSize) {
+      throw new Error('File exceeds upload size limit.');
+    }
+
+    const chunkSize = toPositiveInteger(this.config.chunkSize, 5 * 1024 * 1024);
+    const normalizedTotalChunks = Math.ceil(normalizedFileSize / chunkSize);
+
     const uploadId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     const now = Date.now();
     const expiresAt = now + 60 * 60 * 1000;
@@ -35,9 +51,9 @@ class ChunkUploadService {
       [
         uploadId,
         fileName,
-        fileSize,
+        normalizedFileSize,
         fileType || 'application/octet-stream',
-        totalChunks,
+        normalizedTotalChunks,
         storageMode || null,
         storageId || null,
         normalizedFolderPath,
@@ -50,7 +66,8 @@ class ChunkUploadService {
 
     return {
       uploadId,
-      chunkSize: this.config.chunkSize,
+      chunkSize,
+      totalChunks: normalizedTotalChunks,
       expiresAt,
     };
   }
@@ -79,12 +96,28 @@ class ChunkUploadService {
       throw new Error('Upload task not found or expired.');
     }
 
+    const index = Number(chunkIndex);
+    const totalChunks = Number(task.total_chunks || 0);
+    if (!Number.isInteger(index) || index < 0 || index >= totalChunks) {
+      throw new Error('Invalid chunk index.');
+    }
+
+    const normalizedBuffer = Buffer.from(buffer);
+    if (!normalizedBuffer.byteLength) {
+      throw new Error('Chunk is empty.');
+    }
+
+    const chunkSize = toPositiveInteger(this.config.chunkSize, 5 * 1024 * 1024);
+    if (normalizedBuffer.byteLength > chunkSize) {
+      throw new Error('Chunk size limit exceeded.');
+    }
+
     fs.mkdirSync(this.taskDir(uploadId), { recursive: true });
-    fs.writeFileSync(this.chunkPath(uploadId, chunkIndex), Buffer.from(buffer));
+    fs.writeFileSync(this.chunkPath(uploadId, index), normalizedBuffer);
 
     return {
       success: true,
-      chunkIndex,
+      chunkIndex: index,
     };
   }
 
@@ -109,6 +142,12 @@ class ChunkUploadService {
     }
 
     const combined = Buffer.concat(chunks);
+    if (combined.byteLength !== Number(task.file_size)) {
+      throw new Error('Chunk payload size does not match initialized file size.');
+    }
+    if (combined.byteLength > this.config.uploadMaxSize) {
+      throw new Error('File exceeds upload size limit.');
+    }
 
     const result = await this.uploadService.uploadFile({
       fileName: task.file_name,

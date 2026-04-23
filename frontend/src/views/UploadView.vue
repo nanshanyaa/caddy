@@ -33,7 +33,7 @@
         </nav>
 
         <div class="side-foot">
-          <span>默认走 Telegram 存储</span>
+          <span>默认走当前启用存储</span>
           <span>{{ authStore.guestMode ? '当前是访客上传模式' : '上传后默认复制 Markdown' }}</span>
         </div>
       </aside>

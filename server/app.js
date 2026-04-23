@@ -13,11 +13,11 @@ function createApp() {
   const container = createContainer(process.env);
 
   app.use('*', cors({
-    origin: (origin) => origin || '*',
+    origin: '*',
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'Range', 'X-KVault-Client', 'Accept'],
     exposeHeaders: ['Content-Length', 'Content-Range', 'Accept-Ranges', 'Content-Disposition'],
-    credentials: true,
+    credentials: false,
   }));
 
   app.use('*', async (c, next) => {
@@ -97,6 +97,14 @@ function createApp() {
       traceId,
       ...extra,
     }, statusCode);
+  }
+
+  async function readJsonBody(c) {
+    try {
+      return await c.req.json();
+    } catch {
+      return jsonError(c, 400, 'INVALID_JSON', 'Invalid JSON body.', 'Request body must be valid JSON.');
+    }
   }
 
   function asString(value, fallback = '') {
@@ -382,6 +390,54 @@ function createApp() {
     return String(detail);
   }
 
+  function publicStatusEntry(entry = {}) {
+    const configured = Boolean(entry.configured);
+    const enabled = Boolean(entry.enabled);
+    const connected = Boolean(entry.connected);
+    let message = 'Not configured';
+    if (configured && !enabled) {
+      message = 'Configured but disabled';
+    } else if (configured && connected) {
+      message = 'Connected';
+    } else if (configured) {
+      message = 'Configured but unavailable';
+    }
+
+    return {
+      connected,
+      enabled,
+      configured,
+      layer: entry.layer || 'direct',
+      message,
+    };
+  }
+
+  function publicStatusPayload(status) {
+    return {
+      telegram: publicStatusEntry(status.telegram),
+      r2: publicStatusEntry(status.r2),
+      s3: publicStatusEntry(status.s3),
+      discord: publicStatusEntry(status.discord),
+      huggingface: publicStatusEntry(status.huggingface),
+      webdav: publicStatusEntry(status.webdav),
+      github: publicStatusEntry(status.github),
+      kv: {
+        connected: Boolean(status.kv?.connected),
+        message: status.kv?.connected ? 'Metadata storage enabled' : 'Metadata storage unavailable',
+      },
+      auth: {
+        enabled: Boolean(status.auth?.enabled),
+        message: status.auth?.enabled ? 'Password auth enabled' : 'No auth required',
+      },
+      guestUpload: status.guestUpload,
+      settings: {
+        connected: Boolean(status.settings?.connected),
+        message: status.settings?.connected ? 'Settings store available' : 'Settings store unavailable',
+      },
+      capabilities: status.capabilities,
+    };
+  }
+
   function uploadSuccessResponse(c, result) {
     const item = {
       src: result.src,
@@ -619,7 +675,8 @@ function createApp() {
     if (unauthorized) return unauthorized;
 
     const { storageRepo } = getServices(c);
-    const body = await c.req.json();
+    const body = await readJsonBody(c);
+    if (body instanceof Response) return body;
 
     const created = storageRepo.create({
       name: body.name,
@@ -639,7 +696,8 @@ function createApp() {
 
     const { storageRepo } = getServices(c);
     const id = c.req.param('id');
-    const body = await c.req.json();
+    const body = await readJsonBody(c);
+    if (body instanceof Response) return body;
 
     const updated = storageRepo.update(id, {
       name: body.name,
@@ -745,7 +803,8 @@ function createApp() {
     if (unauthorized) return unauthorized;
 
     const { storageFactory } = getServices(c);
-    const body = await c.req.json();
+    const body = await readJsonBody(c);
+    if (body instanceof Response) return body;
     try {
       const adapter = storageFactory.createTemporaryAdapter(body.type, body.config || {});
       const result = await adapter.testConnection();
@@ -901,6 +960,11 @@ function createApp() {
       },
     ];
 
+    const auth = authService.checkAuthentication(c.req.raw);
+    if (authService.isAuthRequired() && !auth.authenticated) {
+      return c.json(publicStatusPayload(status));
+    }
+
     return c.json(status);
   });
 
@@ -1008,8 +1072,8 @@ function createApp() {
     const fileSize = Number(body.fileSize || 0);
     const totalChunks = Number(body.totalChunks || 0);
 
-    if (!body.fileName || !fileSize || !totalChunks) {
-      return jsonError(c, 400, 'MISSING_PARAMS', 'Missing required parameters.', 'fileName, fileSize and totalChunks are required.');
+    if (!body.fileName || !fileSize) {
+      return jsonError(c, 400, 'MISSING_PARAMS', 'Missing required parameters.', 'fileName and fileSize are required.');
     }
 
     if (fileSize > container.config.uploadMaxSize) {
@@ -1022,15 +1086,22 @@ function createApp() {
       );
     }
 
-    const init = chunkService.initTask({
-      fileName: body.fileName,
-      fileSize,
-      fileType: body.fileType,
-      totalChunks,
-      storageMode: asString(body.storageMode),
-      storageId: asString(body.storageId),
-      folderPath: normalizeFolderPath(body.folderPath || body.folder || ''),
-    });
+    let init;
+    try {
+      init = chunkService.initTask({
+        fileName: body.fileName,
+        fileSize,
+        fileType: body.fileType,
+        totalChunks,
+        storageMode: asString(body.storageMode),
+        storageId: asString(body.storageId),
+        folderPath: normalizeFolderPath(body.folderPath || body.folder || ''),
+      });
+    } catch (error) {
+      const message = error?.message || 'Invalid chunk upload request.';
+      const statusCode = /size limit|too large|exceeds/i.test(message) ? 413 : 400;
+      return jsonError(c, statusCode, 'INVALID_CHUNK_UPLOAD', 'Invalid chunk upload request.', message);
+    }
 
     return c.json({ success: true, ...init });
   });
@@ -1061,9 +1132,16 @@ function createApp() {
     }
 
     const buffer = await chunk.arrayBuffer();
-    chunkService.saveChunk({ uploadId, chunkIndex, buffer });
+    let saved;
+    try {
+      saved = chunkService.saveChunk({ uploadId, chunkIndex, buffer });
+    } catch (error) {
+      const message = error?.message || 'Invalid chunk upload request.';
+      const statusCode = /size limit|too large|exceeded/i.test(message) ? 413 : 400;
+      return jsonError(c, statusCode, 'INVALID_CHUNK_UPLOAD', 'Invalid chunk upload request.', message);
+    }
 
-    return c.json({ success: true, chunkIndex });
+    return c.json({ success: true, chunkIndex: saved.chunkIndex });
   });
 
   app.post('/api/chunked-upload/complete', async (c) => {
@@ -1139,7 +1217,12 @@ function createApp() {
       });
     } catch (error) {
       console.error('file proxy route error:', error);
-      return c.text(`File proxy error: ${error?.message || 'Unknown error'}`, 502);
+      if (c.req.method === 'HEAD') {
+        return c.body(null, 502, {
+          'X-File-Proxy-Error': 'upstream_fetch_failed',
+        });
+      }
+      return c.text('File proxy error.', 502);
     }
   });
 
@@ -1166,7 +1249,7 @@ function createApp() {
     } catch (error) {
       console.error('file proxy HEAD route error:', error);
       return c.body(null, 502, {
-        'X-File-Proxy-Error': String(error?.message || 'Unknown error').slice(0, 200),
+        'X-File-Proxy-Error': 'upstream_fetch_failed',
       });
     }
   });
@@ -1207,7 +1290,7 @@ function createApp() {
       });
     } catch (error) {
       console.error('share proxy route error:', error);
-      return c.text(`Share proxy error: ${error?.message || 'Unknown error'}`, 502);
+      return c.text('Share proxy error.', 502);
     }
   });
 

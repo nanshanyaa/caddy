@@ -7,6 +7,7 @@ const PREFS_STORAGE_KEY = 'kvault:upload-prefs';
 const DEFAULT_CHUNK_SIZE = 5 * 1024 * 1024;
 const SMALL_FILE_THRESHOLD = 20 * 1024 * 1024;
 const V2_ACCEPT = 'application/vnd.kvault.v2+json, application/json;q=0.9, text/plain;q=0.5, */*;q=0.1';
+const STORAGE_STATUS_TYPES = ['telegram', 'r2', 's3', 'discord', 'huggingface', 'github', 'webdav'];
 
 function readPrefs() {
   if (typeof window === 'undefined') {
@@ -102,11 +103,14 @@ export const useUploadStore = defineStore('upload', () => {
   const uploadingCount = computed(() => queue.value.filter((item) => item.status === 'uploading').length);
   const failedCount = computed(() => queue.value.filter((item) => item.status === 'error').length);
   const completedCount = computed(() => queue.value.filter((item) => item.status === 'success').length);
-  const isTelegramAvailable = computed(() => {
+  const isUploadAvailable = computed(() => {
     if (!availability.value) return true;
-    const telegram = availability.value.telegram || {};
-    return telegram.connected !== false || telegram.configured !== false;
+    return STORAGE_STATUS_TYPES.some((type) => {
+      const item = availability.value[type] || {};
+      return item.configured && item.enabled !== false;
+    });
   });
+  const isTelegramAvailable = isUploadAvailable;
   const currentState = computed(() => {
     if (processing.value) return 'uploading';
     if (phase.value === 'error' && !latestResult.value) return 'error';
@@ -252,7 +256,6 @@ export const useUploadStore = defineStore('upload', () => {
     return new Promise((resolve, reject) => {
       const formData = new FormData();
       formData.append('file', item.file);
-      formData.append('storageMode', 'telegram');
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', apiUrl('/upload'));
@@ -298,7 +301,7 @@ export const useUploadStore = defineStore('upload', () => {
   }
 
   async function chunkUpload(item) {
-    const totalChunks = Math.ceil(item.file.size / DEFAULT_CHUNK_SIZE);
+    const requestedTotalChunks = Math.ceil(item.file.size / DEFAULT_CHUNK_SIZE);
 
     const init = await apiFetch('/api/chunked-upload/init', {
       method: 'POST',
@@ -311,13 +314,13 @@ export const useUploadStore = defineStore('upload', () => {
         fileName: item.file.name,
         fileSize: item.file.size,
         fileType: item.file.type,
-        totalChunks,
-        storageMode: 'telegram',
+        totalChunks: requestedTotalChunks,
       }),
     });
 
     const uploadId = init.uploadId;
     const chunkSize = Number(init.chunkSize || DEFAULT_CHUNK_SIZE);
+    const totalChunks = Number(init.totalChunks || Math.ceil(item.file.size / chunkSize));
 
     for (let index = 0; index < totalChunks; index += 1) {
       const start = index * chunkSize;
@@ -420,7 +423,6 @@ export const useUploadStore = defineStore('upload', () => {
         },
         body: JSON.stringify({
           url,
-          storageMode: 'telegram',
         }),
       });
 
@@ -484,6 +486,7 @@ export const useUploadStore = defineStore('upload', () => {
     failedCount,
     completedCount,
     isTelegramAvailable,
+    isUploadAvailable,
     initialize,
     updatePrefs,
     enqueueFiles,

@@ -219,6 +219,11 @@ class StorageConfigRepository {
 
   setDefault(id) {
     return transaction(this.db, () => {
+      const target = this.getById(id, true);
+      if (!target || !target.enabled) {
+        return null;
+      }
+
       run(this.db, 'UPDATE storage_configs SET is_default = 0');
       run(this.db, 'UPDATE storage_configs SET is_default = 1, updated_at = ? WHERE id = ?', [Date.now(), id]);
       return this.getById(id, true);

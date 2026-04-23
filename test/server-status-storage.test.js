@@ -76,4 +76,27 @@ describe('Server status storage semantics', function () {
     assert.strictEqual(status.github.connected, false);
     assert.strictEqual(status.github.enabled, true);
   });
+
+  it('redacts storage diagnostics for unauthenticated status requests when auth is enabled', async function () {
+    process.env.BASIC_USER = 'admin';
+    process.env.BASIC_PASS = 'secret';
+
+    const app = createApp();
+    const statusResponse = await app.fetch(new Request('http://localhost/api/status'));
+    assert.strictEqual(statusResponse.status, 200);
+
+    const raw = await statusResponse.text();
+    const status = JSON.parse(raw);
+
+    assert.ok(status.github);
+    assert.strictEqual(status.github.configured, true);
+    assert.strictEqual(status.github.enabled, true);
+    assert.strictEqual(status.github.connected, false);
+    assert.strictEqual(status.github.message, 'Configured but unavailable');
+    assert.strictEqual(status.github.configName, undefined);
+    assert.strictEqual(status.diagnostics, undefined);
+    assert.ok(!raw.includes('Bad credentials'));
+    assert.ok(!raw.includes('GITHUB_TOKEN'));
+    assert.ok(!raw.includes('owner/repo'));
+  });
 });

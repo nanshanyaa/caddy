@@ -1,4 +1,5 @@
 const assert = require('assert');
+const { loadConfig } = require('../server/lib/config');
 const { AuthService, buildCookieHeader, parseCookies } = require('../server/lib/utils/auth');
 
 describe('Server auth utilities', function () {
@@ -29,5 +30,15 @@ describe('Server auth utilities', function () {
 
     assert.ok(service.createSessionCookie('token').includes('Secure'));
     assert.ok(service.createClearSessionCookies().every((cookie) => cookie.includes('Secure')));
+  });
+
+  it('defaults session cookies to Secure when PUBLIC_BASE_URL is HTTPS', function () {
+    const config = loadConfig({
+      PUBLIC_BASE_URL: 'https://img.example.com',
+      CONFIG_ENCRYPTION_KEY: 'auth_test_key_123456',
+      SESSION_SECRET: 'auth_test_secret_123456',
+    });
+
+    assert.strictEqual(config.sessionCookieSecure, true);
   });
 });

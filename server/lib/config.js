@@ -49,6 +49,7 @@ function loadConfig(env = process.env) {
   const dataDir = env.DATA_DIR
     ? path.resolve(normalizeEnvString(env.DATA_DIR))
     : resolveDataPath('data');
+  const publicBaseUrl = normalizeEnvString(env.PUBLIC_BASE_URL);
   const telegramToken = pickEnvAlias(env, ['TG_BOT_TOKEN', 'TG_Bot_Token']);
   const telegramChatId = pickEnvAlias(env, ['TG_CHAT_ID', 'TG_Chat_ID']);
   const telegramApiBase = pickEnvAlias(env, ['CUSTOM_BOT_API_URL'], 'https://api.telegram.org');
@@ -60,13 +61,13 @@ function loadConfig(env = process.env) {
   return {
     port: toInt(env.PORT, 8787),
     nodeEnv: normalizeEnvString(env.NODE_ENV, 'development'),
-    publicBaseUrl: normalizeEnvString(env.PUBLIC_BASE_URL),
+    publicBaseUrl,
 
     basicUser: normalizeEnvString(env.BASIC_USER),
     basicPass: normalizeEnvString(env.BASIC_PASS),
     sessionCookieName: normalizeEnvString(env.SESSION_COOKIE_NAME, 'k_vault_session'),
     sessionDurationMs: toInt(env.SESSION_DURATION_MS, 24 * 60 * 60 * 1000),
-    sessionCookieSecure: toBool(env.SESSION_COOKIE_SECURE, false),
+    sessionCookieSecure: toBool(env.SESSION_COOKIE_SECURE, publicBaseUrl.startsWith('https://')),
 
     guestUploadEnabled: toBool(env.GUEST_UPLOAD, false),
     guestMaxFileSize: toInt(env.GUEST_MAX_FILE_SIZE, 5 * 1024 * 1024),
@@ -76,6 +77,7 @@ function loadConfig(env = process.env) {
     uploadSmallFileThreshold: toInt(env.UPLOAD_SMALL_FILE_THRESHOLD, 20 * 1024 * 1024),
     chunkSize: toInt(env.CHUNK_SIZE, 5 * 1024 * 1024),
     uploadFromUrlAllowPrivate: toBool(env.UPLOAD_FROM_URL_ALLOW_PRIVATE, false),
+    trustProxyIpHeaders: toBool(env.TRUST_PROXY_IP_HEADERS, true),
 
     configEncryptionKey: normalizeEnvString(env.CONFIG_ENCRYPTION_KEY) || normalizeEnvString(env.FILE_URL_SECRET) || normalizeEnvString(env.SESSION_SECRET) || '',
     sessionSecret: normalizeEnvString(env.SESSION_SECRET) || normalizeEnvString(env.FILE_URL_SECRET) || normalizeEnvString(env.CONFIG_ENCRYPTION_KEY) || '',

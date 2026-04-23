@@ -4,7 +4,7 @@ const { DiscordStorageAdapter } = require('./adapters/discord');
 const { HuggingFaceStorageAdapter } = require('./adapters/huggingface');
 const { WebDAVStorageAdapter } = require('./adapters/webdav');
 const { GitHubStorageAdapter } = require('./adapters/github');
-const { normalizeStorageType } = require('./common');
+const { requireStorageType } = require('./common');
 
 class StorageFactory {
   constructor() {
@@ -21,7 +21,7 @@ class StorageFactory {
       return this.adapterCache.get(cacheKey);
     }
 
-    const type = normalizeStorageType(storageConfig.type);
+    const type = requireStorageType(storageConfig.type);
     const config = storageConfig.config || {};
 
     let adapter;
@@ -48,7 +48,7 @@ class StorageFactory {
   }
 
   createTemporaryAdapter(type, config) {
-    const normalized = normalizeStorageType(type);
+    const normalized = requireStorageType(type);
     const fakeConfig = {
       id: `temp-${Date.now()}`,
       updatedAt: Date.now(),

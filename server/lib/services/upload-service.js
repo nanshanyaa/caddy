@@ -216,22 +216,38 @@ class UploadService {
     };
   }
 
-  async deleteFile(fileId) {
+  async deleteFile(fileId, { metadataOnly = false } = {}) {
     const file = this.fileRepo.getById(fileId);
     if (!file) return { deleted: false, reason: 'not-found' };
 
     const storageConfig = this.storageRepo.getById(file.storage_config_id, true);
-    if (storageConfig) {
+    if (storageConfig && !metadataOnly) {
       const adapter = this.storageFactory.createAdapter(storageConfig);
       try {
-        await adapter.delete({ storageKey: file.storage_key, metadata: file.metadata });
+        const remoteDeleted = await adapter.delete({ storageKey: file.storage_key, metadata: file.metadata });
+        if (remoteDeleted === false) {
+          return {
+            deleted: false,
+            reason: 'remote-delete-failed',
+            error: 'Storage adapter could not confirm remote deletion.',
+          };
+        }
       } catch (error) {
-        // best-effort cleanup on remote storage
+        return {
+          deleted: false,
+          reason: 'remote-delete-failed',
+          error: error?.message || 'Remote storage deletion failed.',
+        };
       }
     }
 
-    this.fileRepo.delete(fileId);
-    return { deleted: true };
+    const localDeleted = this.fileRepo.delete(fileId);
+    if (!localDeleted) return { deleted: false, reason: 'not-found' };
+
+    return {
+      deleted: true,
+      metadataOnly: Boolean(metadataOnly || !storageConfig),
+    };
   }
 }
 

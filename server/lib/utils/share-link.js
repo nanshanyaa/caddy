@@ -5,6 +5,10 @@ function asString(value) {
   return String(value);
 }
 
+function normalizeSecret(secret) {
+  return asString(secret).trim();
+}
+
 function base64url(input) {
   return Buffer.from(input)
     .toString('base64')
@@ -18,8 +22,12 @@ function getSharePayload({ fileId, expiresAt }) {
 }
 
 function signSharePayload(payload, secret) {
+  const normalizedSecret = normalizeSecret(secret);
+  if (!normalizedSecret) {
+    throw new Error('Share signing secret is required.');
+  }
   return base64url(
-    crypto.createHmac('sha256', asString(secret)).update(payload).digest()
+    crypto.createHmac('sha256', normalizedSecret).update(payload).digest()
   );
 }
 
@@ -30,6 +38,7 @@ function createShareSignature({ fileId, expiresAt, secret }) {
 function verifyShareSignature({ fileId, expiresAt, signature, secret }) {
   const actual = asString(signature);
   if (!actual) return false;
+  if (!normalizeSecret(secret)) return false;
 
   const expected = createShareSignature({ fileId, expiresAt, secret });
   const actualBuffer = Buffer.from(actual);

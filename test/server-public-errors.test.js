@@ -1,4 +1,5 @@
 const assert = require('assert');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createApp } = require('../server/app');
@@ -116,6 +117,13 @@ describe('Server public error handling', function () {
     return fileId;
   }
 
+  function emptySecretShareSignature(fileId, expiresAt) {
+    return crypto.createHmac('sha256', '').update(`${fileId}:${expiresAt}`).digest('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+  }
+
   it('returns 400 instead of 500 for malformed storage JSON', async function () {
     const app = createApp();
     const response = await app.fetch(new Request('http://localhost/api/storage', {
@@ -127,6 +135,28 @@ describe('Server public error handling', function () {
     assert.strictEqual(response.status, 400);
     const payload = await response.json();
     assert.strictEqual(payload.errorCode, 'INVALID_JSON');
+  });
+
+  it('returns 400 instead of 500 for malformed route-encoded file ids', async function () {
+    const app = createApp();
+    const malformedId = '%E0%A4%A';
+    const routes = [
+      ['GET', `/api/file-info/${malformedId}`],
+      ['GET', `/file/${malformedId}`],
+      ['HEAD', `/file/${malformedId}`],
+      ['GET', `/share/${malformedId}?exp=1&sig=x`],
+      ['HEAD', `/share/${malformedId}?exp=1&sig=x`],
+      ['GET', `/api/manage/toggleLike/${malformedId}`],
+      ['GET', `/api/manage/editName/${malformedId}?newName=test.png`],
+      ['GET', `/api/manage/block/${malformedId}?action=1`],
+      ['GET', `/api/manage/white/${malformedId}?action=1`],
+      ['GET', `/api/manage/delete/${malformedId}`],
+    ];
+
+    for (const [method, route] of routes) {
+      const response = await app.fetch(new Request(`http://localhost${route}`, { method }));
+      assert.strictEqual(response.status, 400, `${method} ${route}`);
+    }
   });
 
   it('does not expose upstream file proxy errors to public responses', async function () {
@@ -162,5 +192,80 @@ describe('Server public error handling', function () {
     const shareText = await shareResponse.text();
     assert.strictEqual(shareText, 'Share proxy error.');
     assert.ok(!shareText.includes('upstream secret detail'));
+
+    const shareHeadResponse = await app.fetch(new Request(`http://localhost${signed.sharePath}`, { method: 'HEAD' }));
+    assert.strictEqual(shareHeadResponse.status, 502);
+    assert.strictEqual(shareHeadResponse.headers.get('X-File-Proxy-Error'), 'upstream_fetch_failed');
+    assert.ok(!String(shareHeadResponse.headers.get('X-File-Proxy-Error')).includes('upstream secret detail'));
+  });
+
+  it('does not accept share signatures when the signing secret is missing', async function () {
+    process.env.CONFIG_ENCRYPTION_KEY = '';
+    process.env.SESSION_SECRET = '';
+    process.env.FILE_URL_SECRET = '';
+
+    const app = createApp();
+    const fileId = 'unsigned_share_file.png';
+    const expiresAt = Date.now() + 60_000;
+    const forgedSignature = emptySecretShareSignature(fileId, expiresAt);
+
+    const shareResponse = await app.fetch(new Request(`http://localhost/share/${fileId}?exp=${expiresAt}&sig=${forgedSignature}`));
+    assert.strictEqual(shareResponse.status, 403);
+
+    const now = Date.now();
+    const db = initDatabase(process.env.DB_PATH);
+    try {
+      run(
+        db,
+        `INSERT INTO storage_configs(
+          id, name, type, encrypted_payload, is_default, enabled, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'missing-storage-config',
+          'Unparsed test config',
+          'github',
+          '{}',
+          0,
+          1,
+          '{}',
+          now,
+          now,
+        ]
+      );
+      run(
+        db,
+        `INSERT INTO files(
+          id, storage_config_id, storage_type, storage_key, file_name,
+          file_size, mime_type, list_type, label, liked, extra_json, folder_path, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          fileId,
+          'missing-storage-config',
+          'github',
+          'uploads/unsigned_share_file.png',
+          fileId,
+          12,
+          'image/png',
+          'None',
+          'None',
+          0,
+          '{}',
+          '',
+          now,
+          now,
+        ]
+      );
+    } finally {
+      if (typeof db.close === 'function') db.close();
+    }
+
+    const signResponse = await app.fetch(new Request('http://localhost/api/share/sign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileId }),
+    }));
+    assert.strictEqual(signResponse.status, 503);
+    const payload = await signResponse.json();
+    assert.strictEqual(payload.errorCode, 'SHARE_SIGNING_UNAVAILABLE');
   });
 });

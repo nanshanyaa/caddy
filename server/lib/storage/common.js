@@ -27,6 +27,16 @@ const MIME_EXTENSION_MAP = {
   'application/json': 'json',
 };
 
+const SUPPORTED_STORAGE_TYPES = Object.freeze([
+  'telegram',
+  'r2',
+  's3',
+  'discord',
+  'huggingface',
+  'webdav',
+  'github',
+]);
+
 function sanitizeExtension(ext, fallback = 'bin') {
   const normalized = String(ext || '')
     .trim()
@@ -50,23 +60,24 @@ function buildPublicFileId(storageType, fileName, mimeType) {
   return `${storageType}_${Date.now()}_${random}.${extension}`;
 }
 
-function normalizeStorageType(type) {
+function normalizeStorageType(type, fallback = '') {
   const normalized = String(type || '').trim().toLowerCase();
-  const supported = [
-    'telegram',
-    'r2',
-    's3',
-    'discord',
-    'huggingface',
-    'webdav',
-    'github',
-  ];
-  if (supported.includes(normalized)) return normalized;
-  return 'telegram';
+  if (SUPPORTED_STORAGE_TYPES.includes(normalized)) return normalized;
+  return fallback;
+}
+
+function requireStorageType(type) {
+  const normalized = normalizeStorageType(type);
+  if (!normalized) {
+    throw new Error(`Unsupported storage type: ${type || 'unknown'}`);
+  }
+  return normalized;
 }
 
 module.exports = {
+  SUPPORTED_STORAGE_TYPES,
   getExtension,
   buildPublicFileId,
   normalizeStorageType,
+  requireStorageType,
 };

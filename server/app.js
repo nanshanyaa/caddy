@@ -114,6 +114,39 @@ function createApp() {
     return String(value);
   }
 
+  function decodeRouteParam(value) {
+    try {
+      return decodeURIComponent(String(value || ''));
+    } catch {
+      return null;
+    }
+  }
+
+  function invalidFileIdJson(c) {
+    return jsonError(
+      c,
+      400,
+      'INVALID_FILE_ID',
+      'Invalid file id.',
+      'Route parameter must be valid percent-encoded UTF-8.'
+    );
+  }
+
+  function fileDeleteFailure(c, result, fileId) {
+    if (result?.reason === 'remote-delete-failed') {
+      return jsonError(
+        c,
+        502,
+        'FILE_DELETE_FAILED',
+        'File deletion failed.',
+        result.error || 'Remote storage deletion failed.',
+        true,
+        { fileId }
+      );
+    }
+    return jsonError(c, 404, 'FILE_NOT_FOUND', 'File not found.', `File "${fileId}" does not exist.`);
+  }
+
   function firstNonEmpty(...values) {
     for (const value of values) {
       if (value == null) continue;
@@ -678,14 +711,25 @@ function createApp() {
     const body = await readJsonBody(c);
     if (body instanceof Response) return body;
 
-    const created = storageRepo.create({
-      name: body.name,
-      type: body.type,
-      config: body.config || {},
-      enabled: body.enabled !== false,
-      isDefault: Boolean(body.isDefault),
-      metadata: body.metadata || {},
-    });
+    let created;
+    try {
+      created = storageRepo.create({
+        name: body.name,
+        type: body.type,
+        config: body.config || {},
+        enabled: body.enabled !== false,
+        isDefault: Boolean(body.isDefault),
+        metadata: body.metadata || {},
+      });
+    } catch (error) {
+      return jsonError(
+        c,
+        400,
+        'INVALID_STORAGE_CONFIG',
+        'Storage config is invalid.',
+        error?.message || 'Storage config could not be saved.'
+      );
+    }
 
     return c.json({ success: true, item: storageRepo.getById(created.id, false) });
   });
@@ -699,14 +743,25 @@ function createApp() {
     const body = await readJsonBody(c);
     if (body instanceof Response) return body;
 
-    const updated = storageRepo.update(id, {
-      name: body.name,
-      type: body.type,
-      config: body.config,
-      enabled: body.enabled,
-      isDefault: body.isDefault,
-      metadata: body.metadata,
-    });
+    let updated;
+    try {
+      updated = storageRepo.update(id, {
+        name: body.name,
+        type: body.type,
+        config: body.config,
+        enabled: body.enabled,
+        isDefault: body.isDefault,
+        metadata: body.metadata,
+      });
+    } catch (error) {
+      return jsonError(
+        c,
+        400,
+        'INVALID_STORAGE_CONFIG',
+        'Storage config is invalid.',
+        error?.message || 'Storage config could not be saved.'
+      );
+    }
 
     if (!updated) {
       return jsonError(c, 404, 'STORAGE_NOT_FOUND', 'Storage config not found.', `Storage config "${id}" does not exist.`);
@@ -763,6 +818,9 @@ function createApp() {
       }
       return c.json({ success: true, result: normalized });
     } catch (error) {
+      if (/unsupported storage type/i.test(error?.message || '')) {
+        return jsonError(c, 400, 'INVALID_STORAGE_TYPE', 'Invalid storage type.', error.message);
+      }
       const payload = toStorageErrorPayload(error);
       return c.json({ success: true, result: { connected: false, errorModel: payload, detail: payload.detail } });
     }
@@ -817,6 +875,9 @@ function createApp() {
       }
       return c.json({ success: true, result: normalized });
     } catch (error) {
+      if (/unsupported storage type/i.test(error?.message || '')) {
+        return jsonError(c, 400, 'INVALID_STORAGE_TYPE', 'Invalid storage type.', error.message);
+      }
       const payload = toStorageErrorPayload(error);
       return c.json({ success: true, result: { connected: false, errorModel: payload, detail: payload.detail } });
     }
@@ -1173,7 +1234,8 @@ function createApp() {
   // --- File retrieval ---
   app.get('/api/file-info/:id', (c) => {
     const { fileRepo } = getServices(c);
-    const id = decodeURIComponent(c.req.param('id'));
+    const id = decodeRouteParam(c.req.param('id'));
+    if (id == null) return invalidFileIdJson(c);
     const file = fileRepo.getById(id);
 
     if (!file) {
@@ -1198,7 +1260,8 @@ function createApp() {
 
   app.get('/file/:id', async (c) => {
     const { uploadService } = getServices(c);
-    const id = decodeURIComponent(c.req.param('id'));
+    const id = decodeRouteParam(c.req.param('id'));
+    if (id == null) return c.text('Invalid file id.', 400);
     const range = c.req.header('range');
 
     try {
@@ -1229,7 +1292,8 @@ function createApp() {
   app.options('/file/:id', (c) => c.body(null, 204));
   app.on('HEAD', '/file/:id', async (c) => {
     const { uploadService } = getServices(c);
-    const id = decodeURIComponent(c.req.param('id'));
+    const id = decodeRouteParam(c.req.param('id'));
+    if (id == null) return c.body(null, 400);
     const range = c.req.header('range');
 
     try {
@@ -1254,47 +1318,56 @@ function createApp() {
     }
   });
 
-  app.get('/share/:id', async (c) => {
+  async function handleShareRequest(c, { head = false } = {}) {
     const { uploadService } = getServices(c);
-    const fileId = decodeURIComponent(c.req.param('id'));
+    const fileId = decodeRouteParam(c.req.param('id'));
+    if (fileId == null) return head ? c.body(null, 400) : c.text('Invalid share file id.', 400);
     const expiresAt = Number(c.req.query('exp') || 0);
     const signature = c.req.query('sig') || '';
     const range = c.req.header('range');
 
     if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
-      return c.text('Invalid share expiry.', 400);
+      return head ? c.body(null, 400) : c.text('Invalid share expiry.', 400);
     }
     if (Date.now() > expiresAt) {
-      return c.text('Share link expired.', 410);
+      return head ? c.body(null, 410) : c.text('Share link expired.', 410);
     }
 
     const secret = container.config.sessionSecret || container.config.configEncryptionKey;
     if (!verifyShareSignature({ fileId, expiresAt, signature, secret })) {
-      return c.text('Invalid share signature.', 403);
+      return head ? c.body(null, 403) : c.text('Invalid share signature.', 403);
     }
 
     try {
       const result = await uploadService.getFileResponse(fileId, range);
       if (!result) {
-        return c.text('File not found', 404);
+        return head ? c.body(null, 404) : c.text('File not found', 404);
       }
 
       const upstream = result.response;
       const headers = buildFileProxyHeaders(result, upstream.headers);
       headers.set('Cache-Control', 'private, max-age=60');
 
-      return new Response(upstream.body, {
+      return new Response(head ? null : upstream.body, {
         status: upstream.status,
         statusText: upstream.statusText,
         headers,
       });
     } catch (error) {
       console.error('share proxy route error:', error);
+      if (head) {
+        return c.body(null, 502, {
+          'X-File-Proxy-Error': 'upstream_fetch_failed',
+        });
+      }
       return c.text('Share proxy error.', 502);
     }
-  });
+  }
+
+  app.get('/share/:id', (c) => handleShareRequest(c, { head: c.req.method === 'HEAD' }));
 
   app.options('/share/:id', (c) => c.body(null, 204));
+  app.on('HEAD', '/share/:id', (c) => handleShareRequest(c, { head: true }));
 
   app.post('/api/share/sign', async (c) => {
     const unauthorized = requireAuth(c);
@@ -1314,7 +1387,18 @@ function createApp() {
 
     const expiresAt = parseShareExpiry(body.ttlSeconds || body.expiresIn || body.ttl || undefined);
     const secret = container.config.sessionSecret || container.config.configEncryptionKey;
-    const signature = createShareSignature({ fileId, expiresAt, secret });
+    let signature;
+    try {
+      signature = createShareSignature({ fileId, expiresAt, secret });
+    } catch (error) {
+      return jsonError(
+        c,
+        503,
+        'SHARE_SIGNING_UNAVAILABLE',
+        'Share links are not configured.',
+        error?.message || 'Share signing secret is missing.'
+      );
+    }
     const sharePath = `/share/${encodeURIComponent(fileId)}?exp=${expiresAt}&sig=${encodeURIComponent(signature)}`;
 
     return c.json({
@@ -1530,8 +1614,25 @@ function createApp() {
 
     if (recursive) {
       const fileIds = fileRepo.listFileIdsByFolderPrefix(path);
+      const failed = [];
       for (const fileId of fileIds) {
-        await uploadService.deleteFile(fileId);
+        const result = await uploadService.deleteFile(fileId);
+        if (!result.deleted) {
+          failed.push({
+            fileId,
+            reason: result.reason || 'delete-failed',
+            error: result.error || '',
+          });
+        }
+      }
+      if (failed.length > 0) {
+        return c.json({
+          success: false,
+          error: 'Some files could not be deleted.',
+          errorCode: 'FOLDER_DELETE_PARTIAL',
+          errorDetail: 'Folder was not deleted because one or more files could not be removed from storage.',
+          failed,
+        }, 207);
       }
     }
 
@@ -1648,9 +1749,29 @@ function createApp() {
     }
 
     let deleted = 0;
+    const failed = [];
     for (const id of ids) {
       const result = await uploadService.deleteFile(id);
       if (result.deleted) deleted += 1;
+      else {
+        failed.push({
+          fileId: id,
+          reason: result.reason || 'delete-failed',
+          error: result.error || '',
+        });
+      }
+    }
+
+    if (failed.length > 0) {
+      return c.json({
+        success: false,
+        error: 'Some files could not be deleted.',
+        errorCode: 'FILE_DELETE_PARTIAL',
+        errorDetail: 'One or more files could not be removed from storage; local records were kept for retry.',
+        requested: ids.length,
+        deleted,
+        failed,
+      }, 207);
     }
 
     return c.json({
@@ -1665,7 +1786,8 @@ function createApp() {
     if (unauthorized) return unauthorized;
 
     const { fileRepo } = getServices(c);
-    const id = decodeURIComponent(c.req.param('id'));
+    const id = decodeRouteParam(c.req.param('id'));
+    if (id == null) return invalidFileIdJson(c);
     const file = fileRepo.getById(id);
     if (!file) return jsonError(c, 404, 'FILE_NOT_FOUND', 'File not found.', `File "${id}" does not exist.`);
 
@@ -1678,7 +1800,8 @@ function createApp() {
     if (unauthorized) return unauthorized;
 
     const { fileRepo } = getServices(c);
-    const id = decodeURIComponent(c.req.param('id'));
+    const id = decodeRouteParam(c.req.param('id'));
+    if (id == null) return invalidFileIdJson(c);
     const newName = String(c.req.query('newName') || '').trim();
 
     if (!newName) return jsonError(c, 400, 'NEW_NAME_REQUIRED', 'newName is required.', 'Provide newName query parameter.');
@@ -1693,7 +1816,8 @@ function createApp() {
     if (unauthorized) return unauthorized;
 
     const { fileRepo } = getServices(c);
-    const id = decodeURIComponent(c.req.param('id'));
+    const id = decodeRouteParam(c.req.param('id'));
+    if (id == null) return invalidFileIdJson(c);
     const action = c.req.query('action');
     const nextListType = isTruthy(action) ? 'Block' : 'White';
     const updated = fileRepo.updateMetadata(id, { listType: nextListType });
@@ -1707,7 +1831,8 @@ function createApp() {
     if (unauthorized) return unauthorized;
 
     const { fileRepo } = getServices(c);
-    const id = decodeURIComponent(c.req.param('id'));
+    const id = decodeRouteParam(c.req.param('id'));
+    if (id == null) return invalidFileIdJson(c);
     const action = c.req.query('action');
     const nextListType = isTruthy(action) ? 'White' : 'None';
     const updated = fileRepo.updateMetadata(id, { listType: nextListType });
@@ -1721,11 +1846,12 @@ function createApp() {
     if (unauthorized) return unauthorized;
 
     const { uploadService } = getServices(c);
-    const id = decodeURIComponent(c.req.param('id'));
+    const id = decodeRouteParam(c.req.param('id'));
+    if (id == null) return invalidFileIdJson(c);
     const result = await uploadService.deleteFile(id);
 
     if (!result.deleted) {
-      return jsonError(c, 404, 'FILE_NOT_FOUND', 'File not found.', `File "${id}" does not exist.`);
+      return fileDeleteFailure(c, result, id);
     }
 
     return c.json({ success: true, message: 'File deleted.', fileId: id });

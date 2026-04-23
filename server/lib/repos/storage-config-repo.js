@@ -1,6 +1,6 @@
 ﻿const { all, get, run, transaction } = require('../../db');
 const { encryptJson, decryptJson, randomId } = require('../utils/crypto');
-const { normalizeStorageType } = require('../storage/common');
+const { normalizeStorageType, requireStorageType } = require('../storage/common');
 
 class StorageConfigRepository {
   constructor(db, appConfig) {
@@ -103,6 +103,7 @@ class StorageConfigRepository {
 
   findEnabledByType(type) {
     const normalized = normalizeStorageType(type);
+    if (!normalized) return [];
     const rows = all(
       this.db,
       `SELECT * FROM storage_configs
@@ -143,13 +144,18 @@ class StorageConfigRepository {
   }
 
   create({ name, type, config, enabled = true, isDefault = false, metadata = {} }) {
-    const normalizedType = normalizeStorageType(type);
+    const normalizedType = requireStorageType(type);
+    const nextEnabled = enabled !== false;
+    const nextIsDefault = Boolean(isDefault);
+    if (nextIsDefault && !nextEnabled) {
+      throw new Error('Default storage config must be enabled.');
+    }
     const now = Date.now();
     const id = randomId('sc');
     const encrypted = encryptJson(config, this.appConfig.configEncryptionKey);
 
     transaction(this.db, () => {
-      if (isDefault) {
+      if (nextIsDefault) {
         run(this.db, 'UPDATE storage_configs SET is_default = 0');
       }
 
@@ -163,8 +169,8 @@ class StorageConfigRepository {
           name,
           normalizedType,
           JSON.stringify(encrypted),
-          isDefault ? 1 : 0,
-          enabled ? 1 : 0,
+          nextIsDefault ? 1 : 0,
+          nextEnabled ? 1 : 0,
           JSON.stringify(metadata || {}),
           now,
           now,
@@ -179,14 +185,19 @@ class StorageConfigRepository {
     const current = this.getById(id, true);
     if (!current) return null;
 
-    const nextType = normalizeStorageType(patch.type || current.type);
+    const nextType = requireStorageType(patch.type || current.type);
     const nextConfig = this.mergeConfigPreserveSecrets(nextType, current.config, patch.config);
+    const nextEnabled = patch.enabled != null ? Boolean(patch.enabled) : Boolean(current.enabled);
+    const nextIsDefault = patch.isDefault != null ? Boolean(patch.isDefault) : Boolean(current.isDefault);
+    if (nextIsDefault && !nextEnabled) {
+      throw new Error('Default storage config must be enabled.');
+    }
 
     const encrypted = encryptJson(nextConfig, this.appConfig.configEncryptionKey);
     const now = Date.now();
 
     transaction(this.db, () => {
-      if (patch.isDefault) {
+      if (nextIsDefault) {
         run(this.db, 'UPDATE storage_configs SET is_default = 0 WHERE id != ?', [id]);
       }
 
@@ -205,8 +216,8 @@ class StorageConfigRepository {
           patch.name || current.name,
           nextType,
           JSON.stringify(encrypted),
-          patch.isDefault != null ? (patch.isDefault ? 1 : 0) : (current.isDefault ? 1 : 0),
-          patch.enabled != null ? (patch.enabled ? 1 : 0) : (current.enabled ? 1 : 0),
+          nextIsDefault ? 1 : 0,
+          nextEnabled ? 1 : 0,
           JSON.stringify(patch.metadata || current.metadata || {}),
           now,
           id,
@@ -242,7 +253,7 @@ class StorageConfigRepository {
 
   ensureBootstrapStorage() {
     const bootstrap = this.appConfig.bootstrapDefaultStorage;
-    const type = normalizeStorageType(bootstrap.type || 'telegram');
+    const type = normalizeStorageType(bootstrap.type || 'telegram', 'telegram');
 
     const hasRequired = {
       telegram: Boolean(bootstrap.telegram?.botToken && bootstrap.telegram?.chatId),

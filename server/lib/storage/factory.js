@@ -11,13 +11,13 @@ class StorageFactory {
     this.adapterCache = new Map();
   }
 
-  createAdapter(storageConfig) {
+  createAdapter(storageConfig, { cache = true } = {}) {
     if (!storageConfig) {
       throw new Error('Storage config not found.');
     }
 
     const cacheKey = `${storageConfig.id}:${storageConfig.updatedAt}`;
-    if (this.adapterCache.has(cacheKey)) {
+    if (cache && this.adapterCache.has(cacheKey)) {
       return this.adapterCache.get(cacheKey);
     }
 
@@ -43,7 +43,9 @@ class StorageFactory {
       throw new Error(`Unsupported storage type: ${type}`);
     }
 
-    this.adapterCache.set(cacheKey, adapter);
+    if (cache) {
+      this.adapterCache.set(cacheKey, adapter);
+    }
     return adapter;
   }
 
@@ -55,7 +57,7 @@ class StorageFactory {
       type: normalized,
       config,
     };
-    return this.createAdapter(fakeConfig);
+    return this.createAdapter(fakeConfig, { cache: false });
   }
 }
 

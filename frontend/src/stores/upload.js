@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { absoluteFileUrl, apiFetch, getApiBase } from '../api/client';
 import { useUiStore } from './ui';
+import { resolveCurrentUploadState } from './upload-state';
 
 const PREFS_STORAGE_KEY = 'kvault:upload-prefs';
 const DEFAULT_CHUNK_SIZE = 5 * 1024 * 1024;
@@ -112,10 +113,11 @@ export const useUploadStore = defineStore('upload', () => {
   });
   const isTelegramAvailable = isUploadAvailable;
   const currentState = computed(() => {
-    if (processing.value) return 'uploading';
-    if (phase.value === 'error' && !latestResult.value) return 'error';
-    if (latestResult.value) return 'success';
-    return 'idle';
+    return resolveCurrentUploadState({
+      processing: processing.value,
+      phase: phase.value,
+      hasLatestResult: Boolean(latestResult.value),
+    });
   });
 
   async function initialize(force = false) {

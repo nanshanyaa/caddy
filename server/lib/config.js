@@ -66,6 +66,7 @@ function loadConfig(env = process.env) {
     basicPass: normalizeEnvString(env.BASIC_PASS),
     sessionCookieName: normalizeEnvString(env.SESSION_COOKIE_NAME, 'k_vault_session'),
     sessionDurationMs: toInt(env.SESSION_DURATION_MS, 24 * 60 * 60 * 1000),
+    sessionCookieSecure: toBool(env.SESSION_COOKIE_SECURE, false),
 
     guestUploadEnabled: toBool(env.GUEST_UPLOAD, false),
     guestMaxFileSize: toInt(env.GUEST_MAX_FILE_SIZE, 5 * 1024 * 1024),
@@ -74,6 +75,7 @@ function loadConfig(env = process.env) {
     uploadMaxSize: toInt(env.UPLOAD_MAX_SIZE, 100 * 1024 * 1024),
     uploadSmallFileThreshold: toInt(env.UPLOAD_SMALL_FILE_THRESHOLD, 20 * 1024 * 1024),
     chunkSize: toInt(env.CHUNK_SIZE, 5 * 1024 * 1024),
+    uploadFromUrlAllowPrivate: toBool(env.UPLOAD_FROM_URL_ALLOW_PRIVATE, false),
 
     configEncryptionKey: normalizeEnvString(env.CONFIG_ENCRYPTION_KEY) || normalizeEnvString(env.FILE_URL_SECRET) || normalizeEnvString(env.SESSION_SECRET) || '',
     sessionSecret: normalizeEnvString(env.SESSION_SECRET) || normalizeEnvString(env.FILE_URL_SECRET) || normalizeEnvString(env.CONFIG_ENCRYPTION_KEY) || '',

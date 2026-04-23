@@ -982,6 +982,7 @@ function createApp() {
         storageId: asString(payload.storageId || payload.storage_config_id),
         folderPath: normalizeFolderPath(payload.folderPath || payload.folder || ''),
         maxBytes: Math.min(container.config.uploadSmallFileThreshold, container.config.uploadMaxSize),
+        allowPrivateNetwork: container.config.uploadFromUrlAllowPrivate,
       });
     } catch (error) {
       const normalized = normalizeUploadError(c, error, 502);

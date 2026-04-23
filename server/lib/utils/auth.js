@@ -11,10 +11,30 @@ function parseCookies(cookieHeader = '') {
     const [rawName, ...rest] = chunk.trim().split('=');
     if (!rawName) return;
     const rawValue = rest.join('=');
-    result[rawName] = decodeURIComponent(rawValue || '');
+    try {
+      result[rawName] = decodeURIComponent(rawValue || '');
+    } catch {
+      result[rawName] = rawValue || '';
+    }
   });
 
   return result;
+}
+
+function buildCookieHeader(name, value, { maxAge, secure = false } = {}) {
+  const parts = [
+    `${name}=${encodeURIComponent(value || '')}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+  ];
+  if (Number.isFinite(Number(maxAge))) {
+    parts.push(`Max-Age=${Math.max(0, Math.floor(Number(maxAge)))}`);
+  }
+  if (secure) {
+    parts.push('Secure');
+  }
+  return parts.join('; ');
 }
 
 class AuthService {
@@ -90,13 +110,22 @@ class AuthService {
 
   createSessionCookie(token) {
     const maxAge = Math.floor(this.config.sessionDurationMs / 1000);
-    return `${this.config.sessionCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
+    return buildCookieHeader(this.config.sessionCookieName, token, {
+      maxAge,
+      secure: this.config.sessionCookieSecure,
+    });
   }
 
   createClearSessionCookies() {
     return [
-      `${this.config.sessionCookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`,
-      `${LEGACY_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`,
+      buildCookieHeader(this.config.sessionCookieName, '', {
+        maxAge: 0,
+        secure: this.config.sessionCookieSecure,
+      }),
+      buildCookieHeader(LEGACY_COOKIE_NAME, '', {
+        maxAge: 0,
+        secure: this.config.sessionCookieSecure,
+      }),
     ];
   }
 
@@ -126,4 +155,5 @@ class AuthService {
 module.exports = {
   AuthService,
   parseCookies,
+  buildCookieHeader,
 };

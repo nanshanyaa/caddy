@@ -458,15 +458,23 @@
             this.sortOption === 'sizeDesc' ? data.sort((a, b) => b.metadata.fileSize - a.metadata.fileSize) :
             data.sort((a, b) => b.metadata.TimeStamp - a.metadata.TimeStamp);
       },
+      escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      },
       formattedFileDetails(item) {
         const metadata = item.metadata;
         const timestamp = new Date(metadata.TimeStamp).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
         return `
           <div style="text-align: left; padding: 5px;">
-            <div><strong>ID：</strong>${item.name}</div>
-            <div><strong>文件名：</strong>${metadata.fileName || item.name}</div>
-            <div><strong>上传时间：</strong>${timestamp}</div>
-            <div><strong>元数据：</strong>${JSON.stringify(metadata)}</div>
+            <div><strong>ID：</strong>${this.escapeHtml(item.name)}</div>
+            <div><strong>文件名：</strong>${this.escapeHtml(metadata.fileName || item.name)}</div>
+            <div><strong>上传时间：</strong>${this.escapeHtml(timestamp)}</div>
+            <div><strong>元数据：</strong>${this.escapeHtml(JSON.stringify(metadata))}</div>
           </div>
         `;
       },
